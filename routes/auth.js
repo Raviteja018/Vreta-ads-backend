@@ -3,6 +3,7 @@ const User = require("../models/User");
 const authRouter = express.Router();
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const Client = require("../models/Client");
 
 authRouter.post("/admin/login", async (req, res) => {
   const { username, password } = req.body;
@@ -17,21 +18,11 @@ authRouter.post("/admin/login", async (req, res) => {
 
     //check user
     const user = await User.findOne({ username });
-    // if (!user) {
-    //   return res.status(400).json({ message: "Invalid credentials" });
-    // }
 
-    // //compare passwords
-    // const enteredPassword = await bcrypt.compare(password, user.password);
-
-    // if (!enteredPassword) {
-    //   return res.status(400).json({ message: "Incorrect password" });
-    // }
-
-    const isMatch = user && await bcrypt.compare(password, user.password);
-    if(!isMatch){
-        res.status(500).json({message: 'Invalid credentials'})
-        return;
+    const isMatch = user && (await bcrypt.compare(password, user.password));
+    if (!isMatch) {
+      res.status(500).json({ message: "Invalid credentials" });
+      return;
     }
 
     //create JWT token
@@ -46,9 +37,50 @@ authRouter.post("/admin/login", async (req, res) => {
       role: user.role,
       token: token,
     });
-    
   } catch (err) {
     res.status(500).json({ message: "Internal Server error " + err.message });
+  }
+});
+
+authRouter.post("/login", async (req, res) => {
+  const { email, password, role } = req.body;
+  try {
+    if (!email || !password || !role) {
+      return res
+        .status(400)
+        .json({ message: "Please provide email, password and role" });
+    }
+    let UserModel;
+    if (role === "client") {
+      UserModel = Client;
+    } else if (role === "agency") {
+      UserModel = Agency;
+    } else {
+      return res.status(400).json({ message: "Invalid role" });
+    }
+
+    //checking user credentials are correct
+    const user = await UserModel.findOne({ email });
+    const isMatch = user && (await bcrypt.compare(password, user.password));
+
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
+    //create JWT Token
+    const token = jwt.sign(
+      { id: user._id, name: user.fullname, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    res.json({
+      message: `${role} Login Successful`,
+      id: user._id,
+      name: user.fullname,
+      token: token,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Internal Server Error: " + err.message });
   }
 });
 

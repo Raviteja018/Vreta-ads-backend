@@ -3,45 +3,54 @@ const mongoose = require('mongoose');
 const agencySchema = new mongoose.Schema({
   fullname: {
     type: String,
-    required: [true, 'Full name is required'],
-    minlength: [3, 'Full name must be at least 3 characters long'],
-    maxlength: [50, 'Full name cannot exceed 50 characters'],
+    required: true,
+    minlength: 3,
+    maxlength: 50,
     trim: true,
   },
   email: {
     type: String,
-    required: [true, 'Email is required'],
-    match: [/.+\@.+\..+/, 'Please enter a valid email address'],
+    required: true,
+    match: [/.+\@.+\..+/, 'Enter a valid email'],
     lowercase: true,
     trim: true,
-    unique: true, // optional: ensures email is unique
+    unique: true,
   },
   agencyName: {
     type: String,
-    required: [true, 'Company name is required'],
+    required: true,
     minlength: 2,
     maxlength: 50,
     trim: true,
   },
   phone: {
-    type: Number,
-    required: [true, 'Phone number is required'],
+    type: String, // ✅ make it string, same reason as in Client
+    required: true,
     validate: {
-      validator: function (v) {
-        return /^[6-9]\d{9}$/.test(v.toString());
-      },
-      message: (props) => `${props.value} is not a valid 10-digit Indian phone number`,
+      validator: (v) => /^[6-9]\d{9}$/.test(v),
+      message: (props) => `${props.value} is not a valid Indian phone number`,
     },
   },
   agencyAddress: {
     type: String,
-    required: [true, 'Agency address is required'],
+    required: true,
     minlength: 5,
     maxlength: 100,
     trim: true,
   },
+  agencyWebsite: {
+    type: String,
+    trim: true,
+  },
+  password: {
+    type: String,
+    required: true,
+    minlength: 4,
+    maxlength: 1024,
+    trim: true,
+  },
 }, { timestamps: true });
 
-const Agency = mongoose.model('Client', agencySchema);
+const Agency = mongoose.models.Agency || mongoose.model('Agency', agencySchema);
 
 module.exports = Agency;

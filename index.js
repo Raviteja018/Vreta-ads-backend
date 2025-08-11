@@ -5,17 +5,19 @@ const authRouter = require("./routes/auth");
 dotenv.config();
 const cors = require('cors');
 const clientRouter = require("./routes/client");
+const agencyRouter = require("./routes/agency");
 
 const app = express();
 
 app.use(cors({
     origin: 'http://localhost:5173',
     credentials: true,
-}));
+})); 
 
 app.use(express.json())
 app.use('/api', authRouter);
-app.use('/api', clientRouter);
+app.use('/api/client', clientRouter);
+app.use('/api/agency', agencyRouter);
 
 const PORT = process.env.PORT;
 
