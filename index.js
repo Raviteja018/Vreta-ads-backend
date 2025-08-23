@@ -18,6 +18,8 @@ app.use(express.json())
 app.use('/api', authRouter);
 app.use('/api/client', clientRouter);
 app.use('/api/agency', agencyRouter);
+app.use('/api/advertisements', require('./routes/advertisement'));
+app.use('/api/applications', require('./routes/application'));
 
 const PORT = process.env.PORT;
 

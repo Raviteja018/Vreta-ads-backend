@@ -49,6 +49,12 @@ const agencySchema = new mongoose.Schema({
     maxlength: 1024,
     trim: true,
   },
+  role: {
+    type: String,
+    default: 'agency',
+    enum: ['agency'],
+    required: true,
+  },
 }, { timestamps: true });
 
 const Agency = mongoose.models.Agency || mongoose.model('Agency', agencySchema);

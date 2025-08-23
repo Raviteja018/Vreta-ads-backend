@@ -7,6 +7,7 @@ const clientSchema = new mongoose.Schema({
     minlength: 3,
     maxlength: 50,
     trim: true,
+    // No unique constraint - multiple people can have the same name
   },
   email: {
     type: String,
@@ -15,6 +16,7 @@ const clientSchema = new mongoose.Schema({
     lowercase: true,
     trim: true,
     unique: true,
+    index: true, // Explicitly create index for email
   },
   company: {
     type: String,
@@ -44,6 +46,12 @@ const clientSchema = new mongoose.Schema({
     minlength: 4,
     maxlength: 1024, // increase to handle hashed passwords
     trim: true,
+  },
+  role: {
+    type: String,
+    default: 'client',
+    enum: ['client'],
+    required: true,
   },
 }, { timestamps: true });
 

@@ -4,6 +4,7 @@ const authRouter = express.Router();
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const Client = require("../models/Client");
+const Agency = require("../models/Agency");
 
 authRouter.post("/admin/login", async (req, res) => {
   const { username, password } = req.body;
@@ -68,17 +69,21 @@ authRouter.post("/login", async (req, res) => {
     }
     //create JWT Token
     const token = jwt.sign(
-      { id: user._id, name: user.fullname, role: user.role },
+      { id: user._id, name: user.fullname, role: role },
       process.env.JWT_SECRET,
       { expiresIn: "30d" }
     );
 
-    res.json({
+    const responseData = {
       message: `${role} Login Successful`,
       id: user._id,
       name: user.fullname,
+      role: role,
       token: token,
-    });
+    };
+    
+    console.log("Backend sending response:", responseData);
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ message: "Internal Server Error: " + err.message });
   }
