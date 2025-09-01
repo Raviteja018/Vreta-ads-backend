@@ -24,6 +24,18 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Middleware to check if user is admin (employee)
+const requireAdmin = async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Admin access required' });
+    }
+    next();
+  } catch (error) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+};
+
 // Refresh all applications for an agency (to get updated advertisement statuses)
 refreshRouter.get("/all-applications", authenticateToken, async (req, res) => {
   try {
@@ -111,7 +123,8 @@ applicationRouter.post("/", authenticateToken, async (req, res) => {
       proposal,
       budget: budget ? parseFloat(budget) : undefined,
       timeline,
-      portfolio: portfolio || []
+      portfolio: portfolio || [],
+      status: 'employee_review' // Applications now start in employee review
     });
 
     const savedApplication = await newApplication.save();
@@ -122,7 +135,7 @@ applicationRouter.post("/", authenticateToken, async (req, res) => {
       .populate('agency', 'name email company');
     
     res.status(201).json({
-      message: "Application submitted successfully",
+      message: "Application submitted successfully and is under employee review",
       data: populatedApplication
     });
   } catch (error) {
@@ -131,7 +144,7 @@ applicationRouter.post("/", authenticateToken, async (req, res) => {
   }
 });
 
-// Get applications by client (for client dashboard)
+// Get applications by client (for client dashboard) - Only shows approved applications
 applicationRouter.get("/client", authenticateToken, async (req, res) => {
   try {
     // Find advertisements owned by this client
@@ -139,10 +152,14 @@ applicationRouter.get("/client", authenticateToken, async (req, res) => {
     const clientAdvertisements = await Advertisement.find({ client: req.user.id });
     const advertisementIds = clientAdvertisements.map(ad => ad._id);
     
-    // Find applications for those advertisements
-    const applications = await Application.find({ advertisement: { $in: advertisementIds } })
+    // Find applications that have passed employee review and are ready for client review
+    const applications = await Application.find({ 
+      advertisement: { $in: advertisementIds },
+      status: { $in: ['client_review', 'approved', 'rejected', 'completed'] }
+    })
       .populate('advertisement', 'productName productDescription budget category status')
       .populate('agency', 'name email company')
+      .populate('employeeReview.reviewedBy', 'username')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -167,6 +184,7 @@ applicationRouter.get("/agency", authenticateToken, async (req, res) => {
           select: 'fullname company'
         }
       })
+      .populate('employeeReview.reviewedBy', 'username')
       .sort({ createdAt: -1 });
     
     console.log("Agency applications found:", applications.length);
@@ -192,6 +210,7 @@ applicationRouter.get("/advertisement/:adId", async (req, res) => {
   try {
     const applications = await Application.find({ advertisement: req.params.adId })
       .populate('agency', 'name email company')
+      .populate('employeeReview.reviewedBy', 'username')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -214,7 +233,8 @@ applicationRouter.get("/:id", async (req, res) => {
     
     const application = await Application.findById(req.params.id)
       .populate('advertisement', 'productName productDescription budget category status')
-      .populate('agency', 'name email company');
+      .populate('agency', 'name email company')
+      .populate('employeeReview.reviewedBy', 'username');
     
     if (!application) {
       return res.status(404).json({ message: "Application not found" });
@@ -230,7 +250,121 @@ applicationRouter.get("/:id", async (req, res) => {
   }
 });
 
-// Update application status
+// Employee review application
+applicationRouter.post("/:id/employee-review", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      budgetApproved, 
+      proposalQuality, 
+      portfolioQuality, 
+      notes, 
+      decision 
+    } = req.body;
+    
+    if (!decision || !['approve', 'reject'].includes(decision)) {
+      return res.status(400).json({ message: "Valid decision is required" });
+    }
+
+    const application = await Application.findById(id);
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    if (application.status !== 'employee_review') {
+      return res.status(400).json({ message: "Application is not in employee review status" });
+    }
+
+    // Update application with employee review
+    const updateData = {
+      status: decision === 'approve' ? 'client_review' : 'rejected',
+      employeeReview: {
+        reviewedBy: req.user.id,
+        reviewedAt: new Date(),
+        budgetApproved: budgetApproved || false,
+        proposalQuality: proposalQuality || 'fair',
+        portfolioQuality: portfolioQuality || 'fair',
+        notes: notes || '',
+        decision: decision
+      }
+    };
+
+    const updatedApplication = await Application.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('advertisement', 'productName productDescription budget category status')
+     .populate('agency', 'name email company')
+     .populate('employeeReview.reviewedBy', 'username');
+    
+    res.json({
+      message: `Application ${decision === 'approve' ? 'approved and sent to client' : 'rejected'}`,
+      data: updatedApplication
+    });
+  } catch (error) {
+    console.error("Error reviewing application:", error);
+    res.status(500).json({ message: "Error reviewing application", error: error.message });
+  }
+});
+
+// Client review application (accept/reject)
+applicationRouter.post("/:id/client-review", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { decision, feedback } = req.body;
+    
+    if (!decision || !['accepted', 'rejected'].includes(decision)) {
+      return res.status(400).json({ message: "Valid decision is required" });
+    }
+
+    const application = await Application.findById(id);
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    // Check if user owns the advertisement (client)
+    const advertisement = await require('../models/Advertisement').findById(application.advertisement);
+    if (!advertisement) {
+      return res.status(404).json({ message: "Advertisement not found" });
+    }
+    
+    if (advertisement.client.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized to review this application" });
+    }
+
+    if (application.status !== 'client_review') {
+      return res.status(400).json({ message: "Application is not ready for client review" });
+    }
+
+    // Update application with client review
+    const updateData = {
+      status: decision === 'accepted' ? 'approved' : 'rejected',
+      clientReview: {
+        reviewedAt: new Date(),
+        decision: decision,
+        feedback: feedback || ''
+      }
+    };
+
+    const updatedApplication = await Application.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('advertisement', 'productName productDescription budget category status')
+     .populate('agency', 'name email company')
+     .populate('employeeReview.reviewedBy', 'username');
+    
+    res.json({
+      message: `Application ${decision}`,
+      data: updatedApplication
+    });
+  } catch (error) {
+    console.error("Error reviewing application:", error);
+    res.status(500).json({ message: "Error reviewing application", error: error.message });
+  }
+});
+
+// Update application status (legacy endpoint - kept for backward compatibility)
 applicationRouter.patch("/:id", authenticateToken, async (req, res) => {
   try {
     // Validate that the ID parameter is a valid MongoDB ObjectId
@@ -240,7 +374,7 @@ applicationRouter.patch("/:id", authenticateToken, async (req, res) => {
     
     const { status } = req.body;
     
-    if (!status || !['pending', 'approved', 'rejected', 'completed'].includes(status)) {
+    if (!status || !['employee_review', 'client_review', 'approved', 'rejected', 'completed'].includes(status)) {
       return res.status(400).json({ message: "Valid status is required" });
     }
 
@@ -285,7 +419,6 @@ applicationRouter.delete("/:id", authenticateToken, async (req, res) => {
     }
     
     const application = await Application.findById(req.params.id);
-    
     if (!application.id) {
       return res.status(404).json({ message: "Application not found" });
     }

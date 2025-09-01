@@ -5,6 +5,9 @@ const Client = require("../models/Client");
 const Agency = require("../models/Agency");
 const Advertisement = require("../models/Advertisement");
 const Application = require("../models/Application");
+const Employee = require("../models/Employee"); // Added Employee model
+const User = require("../models/User"); // Added User model
+const bcrypt = require("bcryptjs"); // Added bcrypt
 
 // Middleware to check if user is admin
 const requireAdmin = async (req, res, next) => {
@@ -158,16 +161,23 @@ adminRouter.get("/applications", requireAdmin, async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
+    const status = req.query.status; // Filter by status
 
-    const applications = await Application.find()
-      .populate('advertisement', 'productName client')
+    let query = {};
+    if (status) {
+      query.status = status;
+    }
+
+    const applications = await Application.find(query)
+      .populate('advertisement', 'productName client budget')
       .populate('agency', 'fullname agencyName')
-      .select('message proposal budget timeline status createdAt')
+      .populate('employeeReview.reviewedBy', 'username')
+      .select('message proposal budget timeline status createdAt employeeReview')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
-    const total = await Application.countDocuments();
+    const total = await Application.countDocuments(query);
 
     res.json({
       applications,
@@ -181,6 +191,136 @@ adminRouter.get("/applications", requireAdmin, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching applications', error: error.message });
+  }
+});
+
+// Get applications pending employee review
+adminRouter.get("/applications/pending-review", requireAdmin, async (req, res) => {
+  try {
+    const applications = await Application.find({ status: 'employee_review' })
+      .populate('advertisement', 'productName client budget category')
+      .populate('agency', 'fullname agencyName email')
+      .populate('portfolio')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      message: 'Pending review applications retrieved successfully',
+      data: applications
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching pending review applications', error: error.message });
+  }
+});
+
+// Get application details for review
+adminRouter.get("/applications/:id/review", requireAdmin, async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id)
+      .populate('advertisement', 'productName productDescription budget category client')
+      .populate('agency', 'fullname agencyName email portfolio')
+      .populate('employeeReview.reviewedBy', 'username');
+
+    if (!application) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+
+    res.json({
+      message: 'Application details retrieved successfully',
+      data: application
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching application details', error: error.message });
+  }
+});
+
+// Employee review application
+adminRouter.post("/applications/:id/review", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      budgetApproved, 
+      proposalQuality, 
+      portfolioQuality, 
+      notes, 
+      decision 
+    } = req.body;
+    
+    if (!decision || !['approve', 'reject'].includes(decision)) {
+      return res.status(400).json({ message: "Valid decision is required" });
+    }
+
+    const application = await Application.findById(id);
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    if (application.status !== 'employee_review') {
+      return res.status(400).json({ message: "Application is not in employee review status" });
+    }
+
+    // Update application with employee review
+    const updateData = {
+      status: decision === 'approve' ? 'client_review' : 'rejected',
+      employeeReview: {
+        reviewedBy: req.user.id,
+        reviewedAt: new Date(),
+        budgetApproved: budgetApproved || false,
+        proposalQuality: proposalQuality || 'fair',
+        portfolioQuality: portfolioQuality || 'fair',
+        notes: notes || '',
+        decision: decision
+      }
+    };
+
+    const updatedApplication = await Application.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('advertisement', 'productName productDescription budget category status')
+     .populate('agency', 'fullname agencyName')
+     .populate('employeeReview.reviewedBy', 'username');
+    
+    res.json({
+      message: `Application ${decision === 'approve' ? 'approved and sent to client' : 'rejected'}`,
+      data: updatedApplication
+    });
+  } catch (error) {
+    console.error("Error reviewing application:", error);
+    res.status(500).json({ message: "Error reviewing application", error: error.message });
+  }
+});
+
+// Get application statistics for admin dashboard
+adminRouter.get("/applications/stats", requireAdmin, async (req, res) => {
+  try {
+    const stats = await Application.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const totalApplications = await Application.countDocuments();
+    const pendingReview = await Application.countDocuments({ status: 'employee_review' });
+    const clientReview = await Application.countDocuments({ status: 'client_review' });
+    const approved = await Application.countDocuments({ status: 'approved' });
+    const rejected = await Application.countDocuments({ status: 'rejected' });
+
+    res.json({
+      message: 'Application statistics retrieved successfully',
+      data: {
+        total: totalApplications,
+        pendingReview,
+        clientReview,
+        approved,
+        rejected,
+        breakdown: stats
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching application statistics', error: error.message });
   }
 });
 
@@ -392,6 +532,173 @@ adminRouter.get("/recent-activity", requireAdmin, async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Error fetching recent activity', error: error.message });
   }
+});
+
+// Get employees with pagination
+adminRouter.get('/employees', requireAdmin, async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const employees = await Employee.find()
+            .populate('userId', 'username role')
+            .skip(skip)
+            .limit(limit)
+            .sort({ createdAt: -1 });
+
+        const total = await Employee.countDocuments();
+
+        res.json({
+            employees,
+            pagination: {
+                currentPage: page,
+                totalPages: Math.ceil(total / limit),
+                total,
+                limit
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching employees:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Create new employee
+adminRouter.post('/employees', requireAdmin, async (req, res) => {
+    try {
+        const { username, password, fullName, email, department, position, permissions } = req.body;
+
+        // Check if user already exists
+        const existingUser = await User.findOne({ username });
+        if (existingUser) {
+            return res.status(400).json({ message: 'Username already exists' });
+        }
+
+        // Check if employee email already exists
+        const existingEmployee = await Employee.findOne({ email });
+        if (existingEmployee) {
+            return res.status(400).json({ message: 'Employee email already exists' });
+        }
+
+        // Hash password
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+        // Create user
+        const user = new User({
+            username,
+            password: hashedPassword,
+            role: 'employee'
+        });
+        await user.save();
+
+        // Create employee profile
+        const employee = new Employee({
+            userId: user._id,
+            fullName,
+            email,
+            department,
+            position,
+            permissions: permissions || {
+                canReviewApplications: true,
+                canManageUsers: false,
+                canViewAnalytics: true
+            }
+        });
+        await employee.save();
+
+        res.status(201).json({
+            message: 'Employee created successfully',
+            employee: {
+                id: employee._id,
+                username: user.username,
+                fullName: employee.fullName,
+                email: employee.email,
+                department: employee.department,
+                position: employee.position,
+                permissions: employee.permissions
+            }
+        });
+    } catch (error) {
+        console.error('Error creating employee:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Update employee
+adminRouter.put('/employees/:id', requireAdmin, async (req, res) => {
+    try {
+        const { fullName, email, department, position, permissions, isActive } = req.body;
+
+        const employee = await Employee.findById(req.params.id);
+        if (!employee) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+
+        // Update employee fields
+        employee.fullName = fullName || employee.fullName;
+        employee.email = email || employee.email;
+        employee.department = department || employee.department;
+        employee.position = position || employee.position;
+        employee.permissions = permissions || employee.permissions;
+        employee.isActive = isActive !== undefined ? isActive : employee.isActive;
+
+        await employee.save();
+
+        res.json({
+            message: 'Employee updated successfully',
+            employee
+        });
+    } catch (error) {
+        console.error('Error updating employee:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Delete employee
+adminRouter.delete('/employees/:id', requireAdmin, async (req, res) => {
+    try {
+        const employee = await Employee.findById(req.params.id);
+        if (!employee) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+
+        // Delete the user account
+        await User.findByIdAndDelete(employee.userId);
+        
+        // Delete the employee profile
+        await Employee.findByIdAndDelete(req.params.id);
+
+        res.json({ message: 'Employee deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting employee:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Reset employee password
+adminRouter.post('/employees/:id/reset-password', requireAdmin, async (req, res) => {
+    try {
+        const { newPassword } = req.body;
+
+        const employee = await Employee.findById(req.params.id);
+        if (!employee) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+
+        // Hash new password
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+        // Update user password
+        await User.findByIdAndUpdate(employee.userId, { password: hashedPassword });
+
+        res.json({ message: 'Employee password reset successfully' });
+    } catch (error) {
+        console.error('Error resetting employee password:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
 });
 
 module.exports = adminRouter;

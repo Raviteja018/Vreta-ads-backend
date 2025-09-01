@@ -19,6 +19,7 @@ app.use('/api', authRouter);
 app.use('/api/client', clientRouter);
 app.use('/api/agency', agencyRouter);
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/employee', require('./routes/employee'));
 app.use('/api/advertisements', require('./routes/advertisement'));
 app.use('/api/applications', require('./routes/application'));
 
