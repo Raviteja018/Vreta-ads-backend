@@ -68,7 +68,7 @@ const applicationSchema = new mongoose.Schema({
     decision: {
       type: String,
       enum: ['approve', 'reject'],
-      required: true
+      required: false
     }
   },
   // Client review fields

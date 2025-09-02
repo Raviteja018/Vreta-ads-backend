@@ -5,23 +5,44 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Employee = require('../models/Employee');
 const Application = require('../models/Application');
+const { JWT_SECRET } = require('../config/jwt');
 
 // Middleware to check if user is authenticated and is an employee
 const requireAuth = async (req, res, next) => {
   try {
+    console.log('=== Employee Auth Debug ===');
+    console.log('Headers:', req.headers);
+    console.log('Authorization header:', req.headers.authorization);
+    
     const token = req.headers.authorization?.split(' ')[1];
+    console.log('Extracted token:', token ? `"${token.substring(0, 20)}..."` : 'Missing');
+    console.log('JWT_SECRET:', JWT_SECRET ? 'Set' : 'Not set, using fallback');
+    
     if (!token) {
+      console.log('No token provided');
       return res.status(401).json({ message: 'Access token required' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    if (decoded.role !== 'employee') {
-      return res.status(403).json({ message: 'Employee access required' });
-    }
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      console.log('Decoded token:', decoded);
+      console.log('Token role:', decoded.role);
+      console.log('Token user ID:', decoded.id);
+      
+      if (decoded.role !== 'employee') {
+        console.log('Invalid role:', decoded.role);
+        return res.status(403).json({ message: 'Employee access required' });
+      }
 
-    req.user = decoded;
-    next();
+      req.user = decoded;
+      console.log('Authentication successful for user:', decoded.id);
+      next();
+    } catch (jwtError) {
+      console.error('JWT verification failed:', jwtError.message);
+      return res.status(401).json({ message: 'Invalid token' });
+    }
   } catch (error) {
+    console.error('General auth error:', error);
     return res.status(401).json({ message: 'Invalid token' });
   }
 };
@@ -52,11 +73,11 @@ router.post('/login', async (req, res) => {
         // Create token
         const token = jwt.sign(
             { 
-                userId: user._id, 
+                id: user._id, 
                 role: 'employee',
                 permissions: employee.permissions
             },
-            process.env.JWT_SECRET || 'your-secret-key',
+            JWT_SECRET,
             { expiresIn: '24h' }
         );
 
@@ -86,18 +107,25 @@ router.get('/dashboard', requireAuth, async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
 
+        console.log('=== Dashboard Route Debug ===');
+        console.log('User ID:', req.user.id);
+        console.log('User role:', req.user.role);
+
         // Get pending review applications
         const pendingApplications = await Application.find({ status: 'employee_review' })
-            .populate('advertisement', 'productName description')
-            .populate('agency', 'fullname agencyName')
-            .populate('client', 'fullname company')
+            .populate('advertisement', 'productName productDescription budget category status')
+            .populate('agency', 'fullname agencyName email phone')
             .limit(10);
+
+        console.log('Pending applications found:', pendingApplications.length);
 
         // Get application statistics
         const totalPending = await Application.countDocuments({ status: 'employee_review' });
         const totalReviewed = await Application.countDocuments({ 
-            'employeeReview.reviewedBy': req.user.userId 
+            'employeeReview.reviewedBy': req.user.id 
         });
+
+        console.log('Stats - Total pending:', totalPending, 'Total reviewed:', totalReviewed);
 
         res.json({
             pendingApplications,
@@ -108,7 +136,8 @@ router.get('/dashboard', requireAuth, async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching employee dashboard:', error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ message: 'Server error', details: error.message });
     }
 });
 
@@ -119,16 +148,23 @@ router.get('/applications/pending', requireAuth, async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
 
+        console.log('=== Pending Applications Route Debug ===');
+        console.log('User ID:', req.user.id);
+        console.log('User role:', req.user.role);
+
         const applications = await Application.find({ status: 'employee_review' })
-            .populate('advertisement', 'productName description budget')
-            .populate('agency', 'fullname agencyName')
-            .populate('client', 'fullname company')
+            .populate('advertisement', 'productName productDescription budget category status')
+            .populate('agency', 'fullname agencyName email phone')
             .sort({ createdAt: -1 });
+
+        console.log('Applications found:', applications.length);
+        console.log('First application:', applications[0] ? 'Found' : 'None');
 
         res.json(applications);
     } catch (error) {
         console.error('Error fetching pending applications:', error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ message: 'Server error', details: error.message });
     }
 });
 
@@ -140,9 +176,8 @@ router.get('/applications/:id', requireAuth, async (req, res) => {
         }
 
         const application = await Application.findById(req.params.id)
-            .populate('advertisement', 'productName description budget requirements')
+            .populate('advertisement', 'productName productDescription budget category status')
             .populate('agency', 'fullname agencyName email phone')
-            .populate('client', 'fullname company email')
             .populate('employeeReview.reviewedBy', 'username');
 
         if (!application) {
@@ -180,7 +215,7 @@ router.post('/applications/:id/review', requireAuth, async (req, res) => {
 
         // Update application with employee review
         application.employeeReview = {
-            reviewedBy: req.user.userId,
+            reviewedBy: req.user.id,
             reviewedAt: new Date(),
             budgetApproved,
             proposalQuality,
@@ -198,9 +233,15 @@ router.post('/applications/:id/review', requireAuth, async (req, res) => {
 
         await application.save();
 
+        // Populate the updated application for response
+        const updatedApplication = await Application.findById(req.params.id)
+            .populate('advertisement', 'productName productDescription budget category status')
+            .populate('agency', 'fullname agencyName email phone')
+            .populate('employeeReview.reviewedBy', 'username');
+
         res.json({ 
             message: `Application ${decision === 'approve' ? 'approved and sent to client' : 'rejected'}`,
-            application 
+            application: updatedApplication
         });
     } catch (error) {
         console.error('Error submitting review:', error);
@@ -215,7 +256,7 @@ router.get('/profile', requireAuth, async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
 
-        const employee = await Employee.findOne({ userId: req.user.userId });
+        const employee = await Employee.findOne({ userId: req.user.id });
         if (!employee) {
             return res.status(404).json({ message: 'Employee profile not found' });
         }

@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const Client = require("../models/Client");
 const Agency = require("../models/Agency");
+const { JWT_SECRET } = require("../config/jwt");
 
 authRouter.post("/admin/login", async (req, res) => {
   const { username, password } = req.body;
@@ -29,7 +30,7 @@ authRouter.post("/admin/login", async (req, res) => {
     //create JWT token
     const token = jwt.sign(
       { id: user._id, role: user.role },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: "30d" }
     );
     res.json({
@@ -70,7 +71,7 @@ authRouter.post("/login", async (req, res) => {
     //create JWT Token
     const token = jwt.sign(
       { id: user._id, name: user.fullname, role: role },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: "30d" }
     );
 
